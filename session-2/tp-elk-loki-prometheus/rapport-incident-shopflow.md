@@ -53,19 +53,21 @@ Le provider de paiement StripeAPI est devenu injoignable. Chaque appel du
 
 | Requête | LogQL | Mon résultat |
 |---|---|---|
-| **B-2** Tous les ERROR | `{job="shopflow", level="ERROR"}` | _______ |
-| **B-3** ERROR payment-service | `{job="shopflow", level="ERROR", service="payment-service"}` | _______ |
-| **B-4** Timeouts | `{job="shopflow", error_code="PAYMENT_TIMEOUT"}` | _______ |
-| **B-5** Recherche texte | `{job="shopflow"} \|= "rétablie"` | _______ |
-| **B-6** Taux d'erreurs / temps | `sum by (service) (count_over_time({job="shopflow", level="ERROR"}[5m]))` | Pic visible ? _______ |
-| **B-7** Filtre latence (JSON) | `{job="shopflow", service="payment-service"} \| json \| latency_ms > 5000` | _______ |
+| **B-2** Tous les ERROR | `{job="shopflow", level="ERROR"}` | 34 |
+| **B-3** ERROR payment-service | `{job="shopflow", level="ERROR", service="payment-service"}` | 17 |
+| **B-4** Timeouts | `{job="shopflow", error_code="PAYMENT_TIMEOUT"}` | 17 |
+| **B-5** Recherche texte | `{job="shopflow"} \|= "rétablie"` | 1 (« Connexion au provider de paiement rétablie ») |
+| **B-6** Taux d'erreurs / temps | `sum by (service) (count_over_time({job="shopflow", level="ERROR"}[5m]))` | Pic visible ✅ — 2 services : `payment-service` (17) + `api-gateway` (17) = 34 |
+| **B-7** Filtre latence (JSON) | `{job="shopflow", service="payment-service"} \| json \| latency_ms > 5000` | 14 (strict `>`) — **17** avec `>= 5000` (3 timeouts sont pile à 5000 ms) |
 
 **Récapitulatif Loki** :
-- Requête LogQL clé : `{job="shopflow"} | json | ___________________`
-- Taux d'erreur au pic : _______ /min
-- Latence moyenne des timeouts : _______ ms
+- Requête LogQL clé : `{job="shopflow", service="payment-service"} | json | latency_ms >= 5000`
+- Erreurs au pic : 34 dans la fenêtre (17 payment-service + 17 api-gateway)
+- Latence des timeouts : 5000 → 5004 ms (moyenne ≈ 5001 ms, tous au seuil de 5 s)
 
-> ❓ Les résultats Loki sont-ils identiques à ELK ? (même incident, mêmes logs) → _______
+> ✅ **Résultats identiques à ELK** (34 / 17 / 17 / 1) — même incident, syntaxe différente : Loki filtre **par label indexé** (rapide) vs recherche texte `|=` (grep sur le contenu).
+> ⚠️ **Piège des seuils** : `latency_ms > 5000` (strict) renvoie 14 et **rate 3 timeouts** pile à 5000 ms → utiliser `>= 5000` pour capturer les 17.
+> 📌 **Note technique** : le `promtail-config.yml` n'a **pas de stage `timestamp`** → Promtail horodate les logs à l'**heure d'ingestion** (pas nov. 2024). Chercher sur « Last 15 min » dans Grafana, pas sur la date d'origine. Le vrai timestamp reste dans le contenu JSON.
 
 ---
 
