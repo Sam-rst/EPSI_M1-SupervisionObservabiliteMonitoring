@@ -1,0 +1,139 @@
+{
+  "title": "ShopFlow — Métriques Prometheus",
+  "uid": "shopflow-prometheus",
+  "tags": ["shopflow", "tp2", "prometheus"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Taux d'erreur 5xx (%)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "(100 * sum(rate(http_requests_total{job=\"app-sample\", status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"app-sample\"}[5m]))) or vector(0)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "DB Pool — saturation",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "db_connections_active{job=\"app-sample\"} / 50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Latence checkout — P50 / P95 / P99",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+      "gridPos": { "x": 0, "y": 7, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "P50",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"app-sample\", endpoint=\"/api/checkout\"}[5m])) by (le))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "P95",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"app-sample\", endpoint=\"/api/checkout\"}[5m])) by (le))"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "P99",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"app-sample\", endpoint=\"/api/checkout\"}[5m])) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 3,
+      "title": "Débit (req/s) par endpoint",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+      "gridPos": { "x": 12, "y": 7, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{endpoint}}",
+          "datasource": { "type": "prometheus", "uid": "prometheus-shopflow" },
+          "expr": "sum by (endpoint) (rate(http_requests_total{job=\"app-sample\"}[5m]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    }
+  ]
+}

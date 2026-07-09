@@ -134,22 +134,38 @@ la mémoire, ce qui ruine le modèle « petit index » de Loki. On garde donc de
 
 ## ┌─ PARTIE D — Métriques Prometheus (temps réel) ─┐
 
-> À compléter **pendant** l'incident live (`./trigger-incident.sh start`).
+Incident déclenché via `curl http://localhost:8080/incident/start` (30 % des
+`/api/checkout` échouent en `PAYMENT_TIMEOUT`). Dashboard : `ShopFlow — Métriques
+Prometheus` (4 panels, voir `grafana-dashboard-shopflow.json`).
 
 **Baselines vs incident** :
 
 | Métrique | Baseline | Pendant incident | Écart |
 |---|---|---|---|
-| Taux d'erreur 5xx (%) | _______ | _______ | _______ |
-| Latence P95 checkout | _______ | _______ | _______ |
-| Latence P99 checkout | _______ | _______ | _______ |
-| Connexions DB actives | _______ / 50 | _______ / 50 | _______ |
-| Premier panel à réagir | — | _______ | — |
+| Débit total | ~2 req/s | ~2 req/s | stable |
+| Taux d'erreur 5xx (%) | ~0,3 % | ~9,5 % | ×30 |
+| Latence P95 checkout | 0,24 s | 9,2 s | ×38 |
+| Latence P99 checkout | 0,25 s | 9,8 s | ×40 |
+| Connexions DB actives | faibles (~5/50) | jusqu'à 35/50 (70 %) | ↗ saturation |
+| Premier panel à réagir | — | **Latence P99** (puis taux d'erreur) | — |
 
-**Corrélation Loki** (`{job="app-sample"} | json | level="ERROR"`) :
-1. Message + `error_code` observés : _______
-2. Cohérent avec les métriques Prometheus ? _______
-3. Délai de détection visuelle : _______ secondes
+> 💡 Le **P99 de latence** réagit en premier et le plus violemment : les checkouts qui
+> échouent au timeout (~5-6 s) sont captés par le 99ᵉ percentile bien avant que le taux
+> d'erreur (moyenné sur `rate[5m]`) ne rattrape la réalité. Le **P50 reste bas** (client
+> médian servi vite) → d'où l'intérêt des percentiles vs la moyenne.
+> Le taux global plafonne à ~9-10 % (et non 30 %) car seul `/api/checkout` échoue, dilué
+> dans le trafic sain des autres endpoints.
+
+**Corrélation logs** (app-sample non câblé à Loki dans ce compose → logs lus via
+`docker logs shopflow-app-sample`) :
+1. Message + `error_code` : *« Paiement échoué — timeout provider »*, `error_code:
+   PAYMENT_TIMEOUT`, `provider: stripe-api-eu-west` — **même code que l'incident statique
+   des Parties A/B**.
+2. Cohérent avec Prometheus ? **Oui** — les logs montrent `latency_ms ≈ 5999 ms`, ce qui
+   explique le pic P99 (~9 s) et le taux d'erreur du dashboard. Métrique = *« ça va mal »*,
+   log = *« pourquoi : timeout Stripe »*.
+3. Détection visuelle : **quasi immédiate** (le P99 décolle en ~15-30 s après le
+   déclenchement, dès le premier scrape à latence élevée).
 
 ---
 
@@ -157,19 +173,24 @@ la mémoire, ce qui ruine le modèle « petit index » de Loki. On garde donc de
 
 | Critère | ELK | Loki | Prometheus |
 |---|---|---|---|
-| Type de données | _______ | _______ | _______ |
-| Post-mortem (historique) | ___ | ___ | ___ |
-| Détection temps réel | ___ | ___ | ___ |
-| Montant financier bloqué | ___ | ___ | ___ |
-| Root cause dans les logs | ___ | ___ | ___ |
-| Alertes automatiques | ___ | ___ | ___ |
-| Consommation RAM | _______ | _______ | _______ |
+| Type de données | Logs | Logs | Métriques |
+| Post-mortem (historique) | ✅ | ✅ | ⚠️ (rétention limitée) |
+| Détection temps réel | ❌ | ❌ | ✅ |
+| Montant financier bloqué | ✅ | ✅ | ❌ |
+| Root cause dans les logs | ✅ | ✅ | ❌ seul |
+| Alertes automatiques | ⚠️ | ⚠️ | ✅ natif |
+| Consommation RAM | ~1,5 Go | ~200 Mo | ~100 Mo |
 
 **Quel outil aurait détecté l'incident le plus tôt ?**
-_______________________________________________________________
+**Prometheus** — le P99 de latence et le taux d'erreur 5xx explosent en temps réel, avec
+alerting natif, sans attendre une analyse de logs a posteriori.
 
 **Quel outil donne le plus d'information sur la cause ?**
-_______________________________________________________________
+**ELK / Loki** — les logs portent le `error_code` (PAYMENT_TIMEOUT), le `provider`
+(stripe-api-eu-west), le montant bloqué et le message de rétablissement : la root cause et
+l'impact métier précis.
 
 **Quel outil pour ne plus rater ce type d'incident à l'avenir ?**
-_______________________________________________________________
+**Prometheus (détection + alerting) corrélé à Loki dans Grafana** — les métriques disent
+*« quelque chose ne va pas maintenant »*, les logs disent *« voici pourquoi »*. La
+combinaison des deux dans un seul écran est la solution gagnante.
