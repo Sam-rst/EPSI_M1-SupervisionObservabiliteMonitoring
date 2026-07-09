@@ -71,6 +71,67 @@ Le provider de paiement StripeAPI est devenu injoignable. Chaque appel du
 
 ---
 
+## ┌─ PARTIE C — Synthèse ELK vs Loki ─┐
+
+### Tableau comparatif (observé pendant le TP)
+
+| Critère | ELK | Loki |
+|---|---|---|
+| Démarrage (temps/ressources) | Lourd (~60 s, Elasticsearch + Kibana) | Léger (~30 s, Loki + Promtail + Grafana) |
+| Modèle d'index | Index **full-text** sur tout le contenu | Index sur les **labels** seulement |
+| Syntaxe | KQL (`level: "ERROR"`) | LogQL (`{level="ERROR"}` + `\|=`) |
+| Recherche full-text | ✅ native, instantanée | ⚠️ possible via `\|=` (grep, pas d'index) |
+| RAM consommée | ~1,5 Go | ~200 Mo |
+| Intégration Grafana | via plugin | ✅ native (même écosystème que Prometheus) |
+
+### C.2 — Recommandation de migration (au CTO)
+
+**Recommandation : migrer vers Loki.**
+
+Le besoin de ShopFlow est le **diagnostic d'incidents**, pas l'audit full-text ni la
+compliance — or c'est exactement le terrain de Loki, qui n'indexe que les **labels**
+(`service`, `level`, `error_code`) et stocke le contenu compressé. À **200 Go/jour**,
+l'indexation full-text systématique d'Elasticsearch coûte cher en RAM et en stockage
+(~1,5 Go vs ~200 Mo constaté sur le TP) : Loki réduit fortement la facture des
+**1 800 €/mois**. L'équipe est déjà formée sur **Grafana** (pour Prometheus) : Loki
+réutilise cet acquis et offre un **panneau unique** métriques + logs, sans montée en
+compétence supplémentaire. Loki tourne nativement sur **Docker Compose / VM**, sans
+imposer Kubernetes. On ne conserverait ELK que si un besoin de **recherche full-text
+ad hoc ou de compliance** apparaissait — ce qui n'est pas le cas aujourd'hui.
+
+### C.3 — Questions de compréhension
+
+**1. Pourquoi Elasticsearch consomme plus de RAM que Loki ?**
+Elasticsearch construit un **index inversé sur le contenu de chaque champ** (chaque mot
+est tokenisé et indexé), maintenu en partie en mémoire (heap, caches, doc values). Loki
+n'indexe que les **labels** (métadonnées) et garde le contenu des logs **compressé en
+chunks** (stockage objet), sans index full-text → empreinte mémoire minime.
+
+**2. Différence entre `{level="ERROR"}` et `|= "ERROR"` en LogQL ?**
+`{level="ERROR"}` est un **sélecteur de label** : il choisit les *streams* via un label
+indexé (rapide, obligatoire, fait au niveau de l'index). `|= "ERROR"` est un **filtre de
+ligne** : un *grep* sur le contenu brut des streams déjà sélectionnés (parcourt le texte,
+plus lent, matche « ERROR » n'importe où dans la ligne). Le premier cible la métadonnée,
+le second cherche dans le contenu.
+
+**3. Un cas où choisir ELK plutôt que Loki ?**
+Quand on a besoin de **recherche full-text ad hoc** ou d'**audit/compliance/SIEM** : ex.
+une équipe sécurité qui doit retrouver *« toutes les lignes mentionnant cette IP ou cette
+chaîne, tous services confondus »*, sans connaître les labels à l'avance. L'index inversé
+d'ES rend ça instantané ; Loki devrait faire un grep coûteux si les labels ne réduisent
+pas d'abord la fenêtre.
+
+**4. Qu'est-ce qu'un stream ? Pourquoi éviter les labels à haute cardinalité ?**
+Un **stream** = une combinaison **unique** de labels (ex. `{job="shopflow",
+service="payment-service", level="ERROR"}`) ; toutes les lignes partageant ces labels vont
+dans le même stream. Un label à **haute cardinalité** (`user_id`, `trace_id`, `order_id`…)
+génère un stream distinct par valeur → **explosion du nombre de streams**, de l'index et de
+la mémoire, ce qui ruine le modèle « petit index » de Loki. On garde donc des labels à
+**faible cardinalité** (service, level, env) et on met le reste dans le **contenu**
+(interrogé via `| json`).
+
+---
+
 ## ┌─ PARTIE D — Métriques Prometheus (temps réel) ─┐
 
 > À compléter **pendant** l'incident live (`./trigger-incident.sh start`).
