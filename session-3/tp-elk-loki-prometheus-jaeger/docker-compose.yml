@@ -1,0 +1,203 @@
+# =============================================================================
+# BOTE848 — Stack TP Session 2 : Loki + Prometheus + Grafana
+# =============================================================================
+# Démarrage : docker compose up -d
+# Arrêt     : docker compose down
+# Nettoyage : docker compose down -v   (supprime aussi les volumes)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # App échantillon : expose métriques + génère logs JSON
+  # ---------------------------------------------------------------------------
+  app-sample:
+    build: ./app-sample
+    container_name: app-sample
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      SERVICE_NAME: api-gateway
+      ENV: development
+      # Lu depuis l'environnement. Défaut 0.05 (5%). Override pour incident :
+      #   PAYMENT_FAILURE_RATE=0.30 docker compose up -d --force-recreate app-sample
+      PAYMENT_FAILURE_RATE: "${PAYMENT_FAILURE_RATE:-0.05}"
+      # --- Traces (Jaeger / OpenTelemetry) — Séance 3 ---
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4317"
+      OTEL_SERVICE_NAME: api-gateway
+      OTEL_TRACES_SAMPLER: always_on
+    labels:
+      # Tag lu par Promtail : seul les conteneurs avec ce label sont scrapés
+      logging: "promtail"
+      service: "api-gateway"
+      env: "development"
+    restart: unless-stopped
+    depends_on:
+      - jaeger
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Générateur de trafic (alimente l'app en continu pour les dashboards)
+  # ---------------------------------------------------------------------------
+  traffic-gen:
+    build: ./app-sample
+    container_name: traffic-gen
+    command: ["node", "traffic-generator.js"]
+    environment:
+      TARGET_URL: http://app-sample:8000
+      RPS: "5"
+    labels:
+      logging: "promtail"
+      service: "traffic-generator"
+      env: "development"
+    depends_on:
+      - app-sample
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Jaeger : traces distribuées (image all-in-one — agent+collector+query+UI)
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: jaeger
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Loki : stockage et indexation des logs
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Promtail : agent de collecte des logs Docker
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: promtail
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Prometheus : collecte et stockage des métriques
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'             # Permet reload sans restart
+      - '--web.enable-admin-api'
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Node Exporter : métriques système (CPU, RAM, disque...)
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /:/host:ro
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor : métriques par conteneur (CPU/RAM/IO par container)
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+    networks:
+      - bote848
+
+  # ---------------------------------------------------------------------------
+  # Grafana : visualisation (auto-provisionné avec les 2 datasources)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - bote848
+
+volumes:
+  loki-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  bote848:
+    driver: bridge

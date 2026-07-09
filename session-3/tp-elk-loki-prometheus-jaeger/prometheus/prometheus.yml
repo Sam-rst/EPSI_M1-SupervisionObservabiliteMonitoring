@@ -1,0 +1,53 @@
+# =============================================================================
+# Prometheus — configuration de scrape pour la stack TP
+# =============================================================================
+
+global:
+  scrape_interval: 15s        # Fréquence de scrape par défaut
+  scrape_timeout: 10s
+  evaluation_interval: 15s    # Fréquence d'évaluation des règles d'alerte
+  external_labels:
+    environment: 'tp-bote848'
+
+# Fichiers de règles (alertes + recording rules)
+rule_files:
+  - "alert.rules.yml"
+
+# Cibles à scraper
+scrape_configs:
+
+  # --- Prometheus lui-même (self-monitoring) -------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # --- Node Exporter : métriques système (CPU, RAM, disque, réseau) -------
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          host: 'tp-host'
+
+  # --- cAdvisor : métriques par conteneur (CPU/RAM/IO par container) ------
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # --- App sample : métriques applicatives custom -------------------------
+  - job_name: 'app-sample'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['app-sample:8000']
+        labels:
+          env: 'development'
+          service: 'api-gateway'
+
+  # --- Loki : self-monitoring (Loki expose ses propres métriques) ---------
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+
+  # --- Grafana : self-monitoring ------------------------------------------
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']

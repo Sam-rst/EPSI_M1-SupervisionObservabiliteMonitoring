@@ -1,0 +1,45 @@
+groups:
+  - name: shopflow_alerts
+    interval: 30s
+    rules:
+
+      - alert: AppDown
+        expr: up{job="app-sample"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ShopFlow app-sample inaccessible"
+          description: "L'instance {{ $labels.instance }} ne répond plus depuis 1 minute."
+
+      - alert: HighErrorRate
+        expr: >
+          100 * sum(rate(http_requests_total{job="app-sample", status=~"5.."}[5m]))
+              / sum(rate(http_requests_total{job="app-sample"}[5m])) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Taux d'erreur critique : {{ $value | printf \"%.1f\" }}%"
+          description: "Plus de 5% des requêtes retournent une erreur 5xx depuis 1 minute. SLO breached."
+
+      - alert: HighLatencyP95
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="app-sample", endpoint="/api/checkout"}[5m])) by (le)
+          ) > 1.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latence P95 checkout > 1s ({{ $value | printf \"%.2f\" }}s)"
+          description: "Le 95e percentile de latence sur /api/checkout dépasse 1 seconde depuis 2 minutes."
+
+      - alert: DBConnectionsHigh
+        expr: db_connections_active{job="app-sample"} > 40
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pool DB proche de la saturation : {{ $value }}/50 connexions"
+          description: "Risque de saturation du pool de connexions. Vérifier les requêtes longues."

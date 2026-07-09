@@ -1,0 +1,70 @@
+# =============================================================================
+# Promtail — collecte des logs des conteneurs Docker
+# =============================================================================
+# Découverte automatique des conteneurs via le socket Docker.
+# Filtre : ne scrape que les conteneurs étiquetés "logging=promtail".
+# Parsing JSON pour extraire les labels (level, service, error_code...).
+# =============================================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Job: conteneurs Docker étiquetés "logging=promtail"
+  # ---------------------------------------------------------------------------
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+
+    relabel_configs:
+      # Ne garder que les conteneurs taggés "logging=promtail"
+      - source_labels: ['__meta_docker_container_label_logging']
+        regex: 'promtail'
+        action: keep
+
+      # Récupérer le nom du conteneur (retire le slash initial)
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+
+      # Récupérer les labels custom du conteneur
+      - source_labels: ['__meta_docker_container_label_service']
+        target_label: 'service'
+      - source_labels: ['__meta_docker_container_label_env']
+        target_label: 'env'
+
+    pipeline_stages:
+      # Étape 1 : parser le JSON
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            service_log: service
+            message: message
+            user_id: user_id
+            order_id: order_id
+            error_code: error_code
+            duration_ms: duration_ms
+
+      # Étape 2 : promouvoir certains champs en labels Loki
+      # ⚠️ ATTENTION cardinality : ne PAS promouvoir user_id ou order_id
+      # (trop de valeurs uniques = explosion des streams)
+      - labels:
+          level:
+          error_code:
+
+      # Étape 3 : utiliser le timestamp du log (et pas celui d'ingestion)
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+          fallback_formats:
+            - RFC3339
